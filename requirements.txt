@@ -1,0 +1,11 @@
+streamlit
+opencv-python-headless
+ultralytics
+supervision
+streamlit-webrtc
+av
+aiortc
+aioice
+seaborn
+matplotlib
+pandas
