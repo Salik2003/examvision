@@ -21,9 +21,27 @@ os.makedirs("cheating_detections", exist_ok=True)
 # Initialize Alert System
 alert_system = AlertSystem()
 
-# RTC configuration using Google's free STUN server (required for cloud deployment)
+# RTC configuration with STUN + free TURN servers for reliable cloud connectivity
 RTC_CONFIGURATION = RTCConfiguration({
-    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    "iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]},
+        {
+            "urls": ["turn:openrelay.metered.ca:80"],
+            "username": "openrelayproject",
+            "credential": "openrelayproject",
+        },
+        {
+            "urls": ["turn:openrelay.metered.ca:443"],
+            "username": "openrelayproject",
+            "credential": "openrelayproject",
+        },
+        {
+            "urls": ["turn:openrelay.metered.ca:443?transport=tcp"],
+            "username": "openrelayproject",
+            "credential": "openrelayproject",
+        },
+    ]
 })
 
 # Define class names mapping for the new model (13 classes)
