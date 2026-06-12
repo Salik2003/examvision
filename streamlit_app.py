@@ -85,7 +85,7 @@ source = st.sidebar.radio("Select video source", ('Live Video', 'Upload MP4 File
 # Alert System Settings
 st.sidebar.subheader("⚙️ Alert Settings")
 enable_alerts = st.sidebar.checkbox("Enable Alert System", value=True)
-alert_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.5)
+alert_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.35)
 student_id = st.sidebar.text_input("Student ID (Optional)", "")
 
 # Initialize placeholders for displaying metrics
