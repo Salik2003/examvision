@@ -21,25 +21,19 @@ os.makedirs("cheating_detections", exist_ok=True)
 # Initialize Alert System
 alert_system = AlertSystem()
 
-# RTC configuration with STUN + free TURN servers for reliable cloud connectivity
+# RTC configuration using self-hosted coturn TURN server
 RTC_CONFIGURATION = RTCConfiguration({
     "iceServers": [
         {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]},
         {
-            "urls": ["turn:openrelay.metered.ca:80"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
+            "urls": ["turn:13.212.250.73:3478"],
+            "username": "exam",
+            "credential": "vision123",
         },
         {
-            "urls": ["turn:openrelay.metered.ca:443"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
-        },
-        {
-            "urls": ["turn:openrelay.metered.ca:443?transport=tcp"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
+            "urls": ["turn:13.212.250.73:3478?transport=tcp"],
+            "username": "exam",
+            "credential": "vision123",
         },
     ]
 })
