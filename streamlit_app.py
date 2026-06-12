@@ -85,7 +85,13 @@ class YOLOVideoProcessor(VideoProcessorBase):
     """Processes webcam frames from the browser using YOLO detection."""
 
     def __init__(self):
-        self.model = None
+        # Load the best available trained model directly at startup
+        loaded = load_models()
+        self.model = (
+            loaded.get("YOLOv8 Full (New)") or
+            loaded.get("YOLOv8 Standard") or
+            list(loaded.values())[0]
+        )
         self.alert_threshold = 0.5
         self.enable_alerts = True
         self.student_id = ""
@@ -95,9 +101,6 @@ class YOLOVideoProcessor(VideoProcessorBase):
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img = frame.to_ndarray(format="bgr24")
-
-        if self.model is None:
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
 
         results = self.model(img, conf=self.alert_threshold, verbose=False)
         cheat_count = 0
