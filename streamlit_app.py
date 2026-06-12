@@ -116,7 +116,7 @@ class YOLOVideoProcessor(VideoProcessorBase):
             loaded.get("YOLOv8 Standard") or
             list(loaded.values())[0]
         )
-        self.model_names = self.model.names  # dict {id: class_name} from the actual model
+        self.model_names = self.model.names
         self.cheating_classes = get_cheating_classes(self.model_names)
         self.alert_threshold = 0.25
         self.enable_alerts = True
@@ -124,48 +124,63 @@ class YOLOVideoProcessor(VideoProcessorBase):
         self._lock = threading.Lock()
         self.cheating_count = 0
         self.last_alerts = []
+        self._frame_count = 0
+        self._last_boxes = []  # cached (x1,y1,x2,y2,class_name,conf) from last inference
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img = frame.to_ndarray(format="bgr24")
+        self._frame_count += 1
 
-        results = self.model(img, conf=self.alert_threshold, verbose=False)
-        cheat_count = 0
+        # Run YOLO only every 2nd frame to halve CPU load
+        if self._frame_count % 2 == 0:
+            h, w = img.shape[:2]
+            # Shrink to 320px wide for inference (model trained at 320), then scale boxes back
+            small = cv2.resize(img, (320, 240))
+            results = self.model(small, conf=self.alert_threshold, verbose=False, imgsz=320)
+            sx, sy = w / 320, h / 240
 
-        for result in results:
-            boxes = result.boxes
-            if boxes is None:
-                continue
-            for box in boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                class_id = int(box.cls)
-                class_name = self.model_names.get(class_id, f'class_{class_id}')
-                conf = float(box.conf)
+            new_boxes = []
+            cheat_count = 0
+            for result in results:
+                if result.boxes is None:
+                    continue
+                for box in result.boxes:
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    x1, y1, x2, y2 = int(x1*sx), int(y1*sy), int(x2*sx), int(y2*sy)
+                    class_id = int(box.cls)
+                    class_name = self.model_names.get(class_id, f'class_{class_id}')
+                    conf = float(box.conf)
+                    new_boxes.append((x1, y1, x2, y2, class_name, conf))
+                    if class_name in self.cheating_classes:
+                        cheat_count += 1
+                        if self.enable_alerts and alert_system.should_alert(class_name, conf):
+                            record = alert_system.save_alert_frame(
+                                img, class_name, conf, self.student_id or None
+                            )
+                            img = AlertNotifier.create_visual_alert(img, class_name, conf)
+                            with self._lock:
+                                self.last_alerts.append({
+                                    'time': time.time(),
+                                    'class': class_name,
+                                    'conf': conf,
+                                    'record': record
+                                })
+                                self.last_alerts = self.last_alerts[-10:]
 
-                is_cheating = class_name in self.cheating_classes
-                color = (0, 0, 255) if is_cheating else (0, 255, 0)
+            with self._lock:
+                self._last_boxes = new_boxes
+                self.cheating_count = cheat_count
 
-                if is_cheating:
-                    cheat_count += 1
-                    if self.enable_alerts and alert_system.should_alert(class_name, conf):
-                        record = alert_system.save_alert_frame(
-                            img, class_name, conf, self.student_id or None
-                        )
-                        img = AlertNotifier.create_visual_alert(img, class_name, conf)
-                        with self._lock:
-                            self.last_alerts.append({
-                                'time': time.time(),
-                                'class': class_name,
-                                'conf': conf,
-                                'record': record
-                            })
-                            self.last_alerts = self.last_alerts[-10:]
-
-                cv2.rectangle(img, (x1, y1), (x2, y2), color, 3)
-                label = f'{class_name} {conf:.2f}'
-                cv2.putText(img, label, (x1, max(y1 - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
+        # Draw cached boxes on every frame (smooth visual even when skipping inference)
         with self._lock:
-            self.cheating_count = cheat_count
+            boxes_to_draw = list(self._last_boxes)
+
+        for (x1, y1, x2, y2, class_name, conf) in boxes_to_draw:
+            is_cheating = class_name in self.cheating_classes
+            color = (0, 0, 255) if is_cheating else (0, 255, 0)
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(img, f'{class_name} {conf:.2f}', (x1, max(y1 - 8, 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -266,15 +281,6 @@ def detection_page():
     model_selection = st.sidebar.selectbox("Select YOLO model", list(model_paths.keys()))
     model = models[model_selection]
 
-    # Wider video stream box
-    st.markdown(
-        """<style>
-        div[data-testid="stVideo"] video,
-        .stWebrtc video { width: 100% !important; max-width: 900px; }
-        </style>""",
-        unsafe_allow_html=True,
-    )
-
     if source == 'Live Video':
         st.info("📷 Click **START** below to allow browser camera access and begin detection.")
 
@@ -282,7 +288,7 @@ def detection_page():
             key="exam-monitoring",
             video_processor_factory=YOLOVideoProcessor,
             rtc_configuration=RTC_CONFIGURATION,
-            media_stream_constraints={"video": {"width": 1280, "height": 720}, "audio": False},
+            media_stream_constraints={"video": True, "audio": False},
             async_processing=True,
         )
 
