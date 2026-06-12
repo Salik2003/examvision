@@ -284,13 +284,15 @@ def detection_page():
     if source == 'Live Video':
         st.info("📷 Click **START** below to allow browser camera access and begin detection.")
 
-        ctx = webrtc_streamer(
-            key="exam-monitoring",
-            video_processor_factory=YOLOVideoProcessor,
-            rtc_configuration=RTC_CONFIGURATION,
-            media_stream_constraints={"video": True, "audio": False},
-            async_processing=True,
-        )
+        cam_col, _ = st.columns([1, 1])
+        with cam_col:
+            ctx = webrtc_streamer(
+                key="exam-monitoring",
+                video_processor_factory=YOLOVideoProcessor,
+                rtc_configuration=RTC_CONFIGURATION,
+                media_stream_constraints={"video": True, "audio": False},
+                async_processing=True,
+            )
 
         if ctx.video_processor:
             ctx.video_processor.model = model
