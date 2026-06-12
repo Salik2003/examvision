@@ -21,7 +21,7 @@ os.makedirs("cheating_detections", exist_ok=True)
 # Initialize Alert System
 alert_system = AlertSystem()
 
-# RTC configuration using self-hosted coturn TURN server
+# RTC configuration with TURN server for cloud deployment
 RTC_CONFIGURATION = RTCConfiguration({
     "iceServers": [
         {"urls": ["stun:stun.l.google.com:19302"]},
@@ -39,27 +39,15 @@ RTC_CONFIGURATION = RTCConfiguration({
     ]
 })
 
-# Classes the model was trained with — loaded dynamically from model.names.
-# These are fallback names only used if the model can't be loaded.
+# Define class names mapping for the new model (13 classes)
 class_names = {
-    0: 'cheating', 1: 'good', 2: 'normal'
+    0: 'look_down', 1: 'look_forward', 2: 'look_left', 3: 'look_right', 4: 'look_up',
+    5: 'mouth_close', 6: 'mouth_open', 7: 'see_down', 8: 'see_forward', 9: 'see_left',
+    10: 'see_right', 11: 'see_up', 12: 'Face'
 }
 
-# Known cheating class names across all model variants
-CHEATING_CLASSES_FULL = {
-    'cheating', 'look_left', 'look_right', 'look_up', 'look_down',
-    'mouth_open', 'see_left', 'see_right', 'see_down'
-}
-
-def get_cheating_classes(model_names: dict) -> set:
-    """Return the set of class names that represent cheating for a given model."""
-    names = set(model_names.values())
-    # If model has explicit 'cheating' class, use that plus any head-turn classes
-    if 'cheating' in names:
-        return names & CHEATING_CLASSES_FULL
-    # Otherwise use all known cheating class names that appear in this model
-    matched = names & CHEATING_CLASSES_FULL
-    return matched if matched else names - {'good', 'normal', 'look_forward', 'see_forward', 'mouth_close', 'Face'}
+# Cheating classes that trigger alerts
+CHEATING_CLASSES = ['look_left', 'look_right', 'look_up', 'look_down', 'mouth_open', 'see_left', 'see_right', 'see_down']
 
 # Model paths
 model_paths = {
@@ -97,7 +85,7 @@ source = st.sidebar.radio("Select video source", ('Live Video', 'Upload MP4 File
 # Alert System Settings
 st.sidebar.subheader("⚙️ Alert Settings")
 enable_alerts = st.sidebar.checkbox("Enable Alert System", value=True)
-alert_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.25)
+alert_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.5)
 student_id = st.sidebar.text_input("Student ID (Optional)", "")
 
 # Initialize placeholders for displaying metrics
@@ -110,80 +98,63 @@ class YOLOVideoProcessor(VideoProcessorBase):
     """Processes webcam frames from the browser using YOLO detection."""
 
     def __init__(self):
-        loaded = load_models()
-        self.model = (
-            loaded.get("YOLOv8 Full (New)") or
-            loaded.get("YOLOv8 Standard") or
-            list(loaded.values())[0]
-        )
-        self.model_names = self.model.names
-        self.cheating_classes = get_cheating_classes(self.model_names)
-        self.alert_threshold = 0.25
+        self.model = None
+        self.alert_threshold = 0.5
         self.enable_alerts = True
         self.student_id = ""
         self._lock = threading.Lock()
         self.cheating_count = 0
         self.last_alerts = []
-        self._frame_count = 0
-        self._last_boxes = []  # cached (x1,y1,x2,y2,class_name,conf) from last inference
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img = frame.to_ndarray(format="bgr24")
-        self._frame_count += 1
 
-        # Run YOLO only every 2nd frame to halve CPU load
-        if self._frame_count % 2 == 0:
-            # Pass imgsz=320 so YOLO resizes internally; returned coords are in original img space
-            results = self.model(img, conf=self.alert_threshold, verbose=False, imgsz=320)
+        if self.model is None:
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-            new_boxes = []
-            cheat_count = 0
-            for result in results:
-                if result.boxes is None:
-                    continue
-                for box in result.boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                    class_id = int(box.cls)
-                    class_name = self.model_names.get(class_id, f'class_{class_id}')
-                    conf = float(box.conf)
-                    new_boxes.append((x1, y1, x2, y2, class_name, conf))
-                    if class_name in self.cheating_classes:
-                        cheat_count += 1
-                        if self.enable_alerts and alert_system.should_alert(class_name, conf):
-                            record = alert_system.save_alert_frame(
-                                img, class_name, conf, self.student_id or None
-                            )
-                            img = AlertNotifier.create_visual_alert(img, class_name, conf)
-                            with self._lock:
-                                self.last_alerts.append({
-                                    'time': time.time(),
-                                    'class': class_name,
-                                    'conf': conf,
-                                    'record': record
-                                })
-                                self.last_alerts = self.last_alerts[-10:]
+        results = self.model(img, conf=self.alert_threshold, verbose=False)
+        cheat_count = 0
 
-            with self._lock:
-                self._last_boxes = new_boxes
-                self.cheating_count = cheat_count
+        for result in results:
+            boxes = result.boxes
+            if boxes is None:
+                continue
+            for box in boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                class_id = int(box.cls)
+                class_name = class_names.get(class_id, f'Class {class_id}')
+                conf = float(box.conf)
 
-        # Draw cached boxes on every frame (smooth visual even when skipping inference)
+                color = (0, 255, 0)
+                if class_name in CHEATING_CLASSES:
+                    color = (0, 0, 255)
+                    cheat_count += 1
+                    if self.enable_alerts and alert_system.should_alert(class_name, conf):
+                        record = alert_system.save_alert_frame(
+                            img, class_name, conf, self.student_id or None
+                        )
+                        img = AlertNotifier.create_visual_alert(img, class_name, conf)
+                        with self._lock:
+                            self.last_alerts.append({
+                                'time': time.time(),
+                                'class': class_name,
+                                'conf': conf,
+                                'record': record
+                            })
+                            self.last_alerts = self.last_alerts[-10:]
+
+                cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+                label = f'{class_name} {conf:.2f}'
+                cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
         with self._lock:
-            boxes_to_draw = list(self._last_boxes)
-
-        for (x1, y1, x2, y2, class_name, conf) in boxes_to_draw:
-            is_cheating = class_name in self.cheating_classes
-            color = (0, 0, 255) if is_cheating else (0, 255, 0)
-            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(img, f'{class_name} {conf:.2f}', (x1, max(y1 - 8, 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+            self.cheating_count = cheat_count
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 
-def update_class_counts(results, model):
-    model_names = model.names
-    counts = {name: 0 for name in model_names.values()}
+def update_class_counts(results, model_selection):
+    counts = {name: 0 for name in class_names.values()}
     if results is None:
         return counts
 
@@ -195,13 +166,13 @@ def update_class_counts(results, model):
                 if confidence < alert_threshold:
                     continue
                 class_id = int(box.cls)
-                class_name = model_names.get(class_id, 'Unknown')
+                class_name = class_names.get(class_id, 'Unknown')
                 if class_name in counts:
                     counts[class_name] += 1
     return counts
 
 def display_metrics(counts):
-    cheat_count = sum(v for k, v in counts.items() if k in CHEATING_CLASSES_FULL)
+    cheat_count = sum(counts[cls] for cls in CHEATING_CLASSES if cls in counts)
     cheating_placeholder.metric(label='🚨 Suspicious Activities', value=cheat_count)
     if cheat_count > 0:
         status_placeholder.error("⚠️ ALERT: SUSPICIOUS ACTIVITY DETECTED")
@@ -223,22 +194,20 @@ def process_video_capture(video_capture, stframe, model, model_selection):
         if not results:
             continue
 
-        counts = update_class_counts(results, model)
+        counts = update_class_counts(results, model_selection)
         display_metrics(counts)
 
-        model_names = model.names
-        cheating_cls = get_cheating_classes(model_names)
         for result in results:
             boxes = result.boxes
             for box in boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 class_id = int(box.cls)
-                class_name = model_names.get(class_id, f'class_{class_id}')
+                class_name = class_names.get(class_id, f'Class {class_id}')
                 conf = float(box.conf)
 
-                is_cheating = class_name in cheating_cls
-                color = (0, 0, 255) if is_cheating else (0, 255, 0)
-                if is_cheating:
+                color = (0, 255, 0)
+                if class_name in CHEATING_CLASSES:
+                    color = (0, 0, 255)
                     if enable_alerts and alert_system.should_alert(class_name, conf):
                         alert_record = alert_system.save_alert_frame(
                             frame, class_name, conf, student_id if student_id else None
@@ -251,9 +220,9 @@ def process_video_capture(video_capture, stframe, model, model_selection):
                         })
                         frame = AlertNotifier.create_visual_alert(frame, class_name, conf)
 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 label = f'{class_name} {conf:.2f}'
-                cv2.putText(frame, label, (x1, max(y1 - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
         if alerts:
             with alert_log.container():
@@ -280,24 +249,22 @@ def detection_page():
     if source == 'Live Video':
         st.info("📷 Click **START** below to allow browser camera access and begin detection.")
 
-        cam_col, _ = st.columns([1, 1])
-        with cam_col:
-            ctx = webrtc_streamer(
-                key="exam-monitoring",
-                video_processor_factory=YOLOVideoProcessor,
-                rtc_configuration=RTC_CONFIGURATION,
-                media_stream_constraints={"video": True, "audio": False},
-                async_processing=True,
-            )
+        ctx = webrtc_streamer(
+            key="exam-monitoring",
+            video_processor_factory=YOLOVideoProcessor,
+            rtc_configuration=RTC_CONFIGURATION,
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True,
+        )
 
         if ctx.video_processor:
+            # Pass current sidebar settings into the processor
             ctx.video_processor.model = model
-            ctx.video_processor.model_names = model.names
-            ctx.video_processor.cheating_classes = get_cheating_classes(model.names)
             ctx.video_processor.alert_threshold = alert_threshold
             ctx.video_processor.enable_alerts = enable_alerts
             ctx.video_processor.student_id = student_id
 
+            # Read live metrics back from the processor
             with ctx.video_processor._lock:
                 count = ctx.video_processor.cheating_count
                 recent_alerts = ctx.video_processor.last_alerts.copy()
