@@ -85,7 +85,7 @@ source = st.sidebar.radio("Select video source", ('Live Video', 'Upload MP4 File
 # Alert System Settings
 st.sidebar.subheader("⚙️ Alert Settings")
 enable_alerts = st.sidebar.checkbox("Enable Alert System", value=True)
-alert_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.35)
+alert_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.25)
 student_id = st.sidebar.text_input("Student ID (Optional)", "")
 
 # Initialize placeholders for displaying metrics
@@ -112,7 +112,7 @@ class YOLOVideoProcessor(VideoProcessorBase):
         if self.model is None:
             return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-        results = self.model(img, conf=self.alert_threshold, verbose=False)
+        results = self.model(img, conf=self.alert_threshold, verbose=False, imgsz=320)
         cheat_count = 0
 
         for result in results:
