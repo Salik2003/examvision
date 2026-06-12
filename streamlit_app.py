@@ -255,42 +255,56 @@ def detection_page():
     model = models[model_selection]
 
     if source == 'Live Video':
-        st.info("📷 Click **START** below to allow browser camera access and begin detection.")
+        st.info("📷 Allow camera access below. Detection runs automatically on each captured frame.")
 
-        ctx = webrtc_streamer(
-            key="exam-monitoring",
-            video_processor_factory=YOLOVideoProcessor,
-            rtc_configuration=RTC_CONFIGURATION,
-            media_stream_constraints={"video": True, "audio": False},
-            async_processing=True,
-        )
+        img_file = st.camera_input("Camera Feed")
 
-        if ctx.video_processor:
-            # Pass current sidebar settings into the processor
-            ctx.video_processor.model = model
-            ctx.video_processor.alert_threshold = alert_threshold
-            ctx.video_processor.enable_alerts = enable_alerts
-            ctx.video_processor.student_id = student_id
+        if img_file is not None:
+            file_bytes = np.frombuffer(img_file.getvalue(), np.uint8)
+            frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-            # Read live metrics back from the processor
-            with ctx.video_processor._lock:
-                count = ctx.video_processor.cheating_count
-                recent_alerts = ctx.video_processor.last_alerts.copy()
+            results = model(frame, conf=alert_threshold, verbose=False)
+            cheat_count = 0
+            alerts = []
 
-            cheating_placeholder.metric(label='🚨 Suspicious Activities', value=count)
-            if count > 0:
+            for result in results:
+                boxes = result.boxes
+                if boxes is None:
+                    continue
+                for box in boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    class_id = int(box.cls)
+                    class_name = class_names.get(class_id, f'Class {class_id}')
+                    conf = float(box.conf)
+
+                    color = (0, 255, 0)
+                    if class_name in CHEATING_CLASSES:
+                        color = (0, 0, 255)
+                        cheat_count += 1
+                        if enable_alerts and alert_system.should_alert(class_name, conf):
+                            record = alert_system.save_alert_frame(
+                                frame, class_name, conf, student_id or None
+                            )
+                            frame = AlertNotifier.create_visual_alert(frame, class_name, conf)
+                            alerts.append({'time': time.time(), 'class': class_name, 'conf': conf, 'record': record})
+
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    label = f'{class_name} {conf:.2f}'
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+            cheating_placeholder.metric(label='🚨 Suspicious Activities', value=cheat_count)
+            if cheat_count > 0:
                 status_placeholder.error("⚠️ ALERT: SUSPICIOUS ACTIVITY DETECTED")
             else:
                 status_placeholder.success("✅ STATUS: NORMAL")
 
-            if recent_alerts:
-                with alert_log_placeholder.container():
-                    st.write("### 🚨 Recent Alerts")
-                    for a in recent_alerts[-5:]:
-                        st.warning(
-                            f"[{datetime.fromtimestamp(a['time']).strftime('%H:%M:%S')}] "
-                            f"**{a['class']}** (Conf: {a['conf']:.2f})"
-                        )
+            annotated = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            st.image(annotated, channels='RGB', use_column_width=True)
+
+            if alerts:
+                st.write("### 🚨 Recent Alerts")
+                for a in alerts[-5:]:
+                    st.warning(f"[{datetime.fromtimestamp(a['time']).strftime('%H:%M:%S')}] **{a['class']}** (Conf: {a['conf']:.2f})")
 
     elif source == 'Upload MP4 File':
         uploaded_file = st.file_uploader("Choose a video...", type=["mp4"])
