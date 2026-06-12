@@ -133,11 +133,8 @@ class YOLOVideoProcessor(VideoProcessorBase):
 
         # Run YOLO only every 2nd frame to halve CPU load
         if self._frame_count % 2 == 0:
-            h, w = img.shape[:2]
-            # Shrink to 320px wide for inference (model trained at 320), then scale boxes back
-            small = cv2.resize(img, (320, 240))
-            results = self.model(small, conf=self.alert_threshold, verbose=False, imgsz=320)
-            sx, sy = w / 320, h / 240
+            # Pass imgsz=320 so YOLO resizes internally; returned coords are in original img space
+            results = self.model(img, conf=self.alert_threshold, verbose=False, imgsz=320)
 
             new_boxes = []
             cheat_count = 0
@@ -145,8 +142,7 @@ class YOLOVideoProcessor(VideoProcessorBase):
                 if result.boxes is None:
                     continue
                 for box in result.boxes:
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    x1, y1, x2, y2 = int(x1*sx), int(y1*sy), int(x2*sx), int(y2*sy)
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                     class_id = int(box.cls)
                     class_name = self.model_names.get(class_id, f'class_{class_id}')
                     conf = float(box.conf)
