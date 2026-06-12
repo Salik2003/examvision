@@ -9,4 +9,3 @@ aioice
 seaborn
 matplotlib
 pandas
-mediapipe
